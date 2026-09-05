@@ -98,7 +98,22 @@ export default {
       }
     }
 
-    // /proxy?url=FULL_URL — proxies shiora and megaplay segments
+    if (url.pathname === '/raw') {
+      const targetUrl = decodeURIComponent(url.searchParams.get('url') || '');
+      if (!targetUrl) return new Response('Missing url', { status: 400 });
+      const res = await fetch(targetUrl, {
+        headers: {
+          'Origin': 'https://megaplay.buzz',
+          'Referer': 'https://megaplay.buzz/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0'
+        }
+      });
+      const body = await res.text();
+      return new Response(body, {
+        headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
+
     if (url.pathname === '/proxy') {
       const targetUrl = decodeURIComponent(url.searchParams.get('url') || '');
       if (!targetUrl) return new Response('Missing url', { status: 400 });
@@ -120,21 +135,32 @@ export default {
         }
       });
 
-      const isPlaylist = targetUrl.includes('.m3u8') || (proxyRes.headers.get('content-type') || '').includes('mpegurl');
+      const isPlaylist = targetUrl.includes('.m3u8') ||
+                         (proxyRes.headers.get('content-type') || '').includes('mpegurl');
 
       if (isPlaylist) {
         let body = await proxyRes.text();
         const proxyBase = 'https://' + url.hostname;
 
-        // Rewrite absolute URLs
+        const cdnHostMatch = targetUrl.match(/https?:\/\/([a-zA-Z0-9\-\.]+shiora\.site)/);
+        const cdnBase = cdnHostMatch ? 'https://' + cdnHostMatch[1] : '';
+
+        // Rewrite absolute shiora URLs
         body = body.replace(
           /https?:\/\/[a-zA-Z0-9\-\.]+shiora\.site\/[^\s\n]+/g,
           function(match) { return proxyBase + '/proxy?url=' + encodeURIComponent(match); }
         );
 
-        // Rewrite relative URLs
-        const cdnHostMatch = targetUrl.match(/https?:\/\/([a-zA-Z0-9\-\.]+shiora\.site)/);
-        const cdnBase = cdnHostMatch ? 'https://' + cdnHostMatch[1] : '';
+        // Rewrite relative URLs (both /absolute and relative.m3u8)
+        body = body.replace(
+          /^([^#\s][^\s\n]+\.m3u8[^\s\n]*)/gm,
+          function(match) {
+            var absolute = match.startsWith('http') ? match : (cdnBase ? cdnBase + '/' + match : match);
+            return proxyBase + '/proxy?url=' + encodeURIComponent(absolute);
+          }
+        );
+
+        // Rewrite /absolute paths
         if (cdnBase) {
           body = body.replace(
             /^(\/[^\s\n]+)/gm,
