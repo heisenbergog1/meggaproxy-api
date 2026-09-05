@@ -27,7 +27,6 @@ export default {
       try {
         const embedUrl = 'https://megaplay.buzz/stream/s-2/' + streamId + '/dub?s=tcdn&autostart=true';
 
-        // Step 1: Load embed page to get file ID
         const embedRes = await fetch(embedUrl, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0',
@@ -42,14 +41,11 @@ export default {
         });
 
         const html = await embedRes.text();
-
-        // Extract file ID from page title "File 36111 - MegaPlay"
         const fileIdMatch = html.match(/File (\d+) - MegaPlay/);
         if (!fileIdMatch) {
-          return new Response(JSON.stringify({ 
-            error: 'Could not extract file ID', 
-            preview: html.substring(0, 500),
-            embedUrl: embedUrl
+          return new Response(JSON.stringify({
+            error: 'Could not extract file ID',
+            preview: html.substring(0, 500)
           }), {
             headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
           });
@@ -57,7 +53,6 @@ export default {
 
         const fileId = fileIdMatch[1];
 
-        // Step 2: Hit getSources with exact headers from HAR
         const sourcesRes = await fetch('https://megaplay.buzz/stream/getSources?id=' + fileId + '&id=' + fileId + '&s=tcdn', {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0',
@@ -72,10 +67,9 @@ export default {
         });
 
         const sources = await sourcesRes.json();
-
         if (!sources.sources || !sources.sources.file) {
-          return new Response(JSON.stringify({ 
-            error: 'No source found', 
+          return new Response(JSON.stringify({
+            error: 'No source found',
             raw: sources,
             fileId: fileId
           }), {
@@ -83,9 +77,13 @@ export default {
           });
         }
 
+        const sourceUrl = sources.sources.file;
+        const proxied = 'https://' + url.hostname + '/proxy?url=' + encodeURIComponent(sourceUrl);
+
         return new Response(JSON.stringify({
           ok: true,
-          source: sources.sources.file,
+          source: sourceUrl,
+          proxied: proxied,
           fileId: fileId,
           streamId: streamId
         }), {
@@ -98,6 +96,67 @@ export default {
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
       }
+    }
+
+    // /proxy?url=FULL_URL — proxies shiora and megaplay segments
+    if (url.pathname === '/proxy') {
+      const targetUrl = decodeURIComponent(url.searchParams.get('url') || '');
+      if (!targetUrl) return new Response('Missing url', { status: 400 });
+
+      if (!targetUrl.includes('shiora.site') && !targetUrl.includes('megaplay.buzz') && !targetUrl.includes('megap.')) {
+        return new Response('Domain not allowed: ' + targetUrl.substring(0, 100), { status: 403 });
+      }
+
+      const proxyRes = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0',
+          'Accept': '*/*',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Origin': 'https://megaplay.buzz',
+          'Referer': 'https://megaplay.buzz/',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-origin'
+        }
+      });
+
+      const isPlaylist = targetUrl.includes('.m3u8') || (proxyRes.headers.get('content-type') || '').includes('mpegurl');
+
+      if (isPlaylist) {
+        let body = await proxyRes.text();
+        const proxyBase = 'https://' + url.hostname;
+
+        // Rewrite absolute URLs
+        body = body.replace(
+          /https?:\/\/[a-zA-Z0-9\-\.]+shiora\.site\/[^\s\n]+/g,
+          function(match) { return proxyBase + '/proxy?url=' + encodeURIComponent(match); }
+        );
+
+        // Rewrite relative URLs
+        const cdnHostMatch = targetUrl.match(/https?:\/\/([a-zA-Z0-9\-\.]+shiora\.site)/);
+        const cdnBase = cdnHostMatch ? 'https://' + cdnHostMatch[1] : '';
+        if (cdnBase) {
+          body = body.replace(
+            /^(\/[^\s\n]+)/gm,
+            function(match) { return proxyBase + '/proxy?url=' + encodeURIComponent(cdnBase + match); }
+          );
+        }
+
+        return new Response(body, {
+          headers: {
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      }
+
+      const buffer = await proxyRes.arrayBuffer();
+      return new Response(buffer, {
+        headers: {
+          'Content-Type': proxyRes.headers.get('content-type') || 'video/mp2t',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
     }
 
     return new Response('Not found', { status: 404 });
