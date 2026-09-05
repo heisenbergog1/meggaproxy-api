@@ -16,7 +16,7 @@ export default {
       const ep = url.searchParams.get('ep') || '1';
       if (!slug) return json({ error: 'missing slug' }, cors);
 
-      const servers = ['neko', 'kiwi', 'koto', 'wave', 'zen'];
+      const servers = ['koto', 'neko', 'kiwi', 'wave', 'zen'];
       let sources = null;
 
       for (var i = 0; i < servers.length; i++) {
