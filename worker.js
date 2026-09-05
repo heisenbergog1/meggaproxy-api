@@ -1,190 +1,117 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    };
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Allow-Headers': '*'
-        }
-      });
+      return new Response(null, { headers: cors });
     }
 
-    if (url.pathname === '/ping') {
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
-    }
+    // Route: /sources?slug=hcmWMvMUoE&ep=3
+    if (url.pathname === '/sources') {
+      const slug = url.searchParams.get('slug');
+      const ep = url.searchParams.get('ep') || '1';
+      if (!slug) return json({ error: 'missing slug' }, cors);
 
-    if (url.pathname === '/megascrape') {
-      const streamId = url.searchParams.get('id');
-      if (!streamId) return new Response(JSON.stringify({ error: 'Missing id' }), {
-        status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
+      const servers = ['neko', 'kiwi', 'koto', 'wave', 'zen'];
+      let sources = null;
 
-      try {
-        const embedUrl = 'https://megaplay.buzz/stream/s-2/' + streamId + '/dub?s=tcdn&autostart=true';
-
-        const embedRes = await fetch(embedUrl, {
+      for (var i = 0; i < servers.length; i++) {
+        var s = servers[i];
+        var apiUrl = 'https://anikage.cc/api/media/anime/' + slug + '/episodes/' + ep + '/sources?provider=' + s + '&lang=dub&server=' + s;
+        var r = await fetch(apiUrl, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://anikoto.cz/',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'iframe',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'cross-site'
+            'Referer': 'https://anikage.cc/',
+            'Origin': 'https://anikage.cc',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
           }
         });
-
-        const html = await embedRes.text();
-        const fileIdMatch = html.match(/File (\d+) - MegaPlay/);
-        if (!fileIdMatch) {
-          return new Response(JSON.stringify({
-            error: 'Could not extract file ID',
-            preview: html.substring(0, 500)
-          }), {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-
-        const fileId = fileIdMatch[1];
-
-        const sourcesRes = await fetch('https://megaplay.buzz/stream/getSources?id=' + fileId + '&id=' + fileId + '&s=tcdn', {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0',
-            'Accept': 'application/json, text/javascript, */*; q=0.01',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Referer': embedUrl,
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-origin'
+        if (r.ok) {
+          var data = await r.json();
+          if (data.sources && data.sources.length > 0) {
+            sources = data;
+            break;
           }
-        });
-
-        const sources = await sourcesRes.json();
-        if (!sources.sources || !sources.sources.file) {
-          return new Response(JSON.stringify({
-            error: 'No source found',
-            raw: sources,
-            fileId: fileId
-          }), {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
         }
-
-        const sourceUrl = sources.sources.file;
-        const proxied = 'https://' + url.hostname + '/proxy?url=' + encodeURIComponent(sourceUrl);
-
-        return new Response(JSON.stringify({
-          ok: true,
-          source: sourceUrl,
-          proxied: proxied,
-          fileId: fileId,
-          streamId: streamId
-        }), {
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-        });
-
-      } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-        });
-      }
-    }
-
-    if (url.pathname === '/raw') {
-      const targetUrl = decodeURIComponent(url.searchParams.get('url') || '');
-      if (!targetUrl) return new Response('Missing url', { status: 400 });
-      const res = await fetch(targetUrl, {
-        headers: {
-          'Origin': 'https://megaplay.buzz',
-          'Referer': 'https://megaplay.buzz/',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0'
-        }
-      });
-      const body = await res.text();
-      return new Response(body, {
-        headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' }
-      });
-    }
-
-    if (url.pathname === '/proxy') {
-      const targetUrl = decodeURIComponent(url.searchParams.get('url') || '');
-      if (!targetUrl) return new Response('Missing url', { status: 400 });
-
-      if (!targetUrl.includes('shiora.site') && !targetUrl.includes('megaplay.buzz') && !targetUrl.includes('megap.')) {
-        return new Response('Domain not allowed: ' + targetUrl.substring(0, 100), { status: 403 });
       }
 
-      const proxyRes = await fetch(targetUrl, {
+      if (!sources) return json({ error: 'no dub sources found' }, cors);
+
+      // Pick best quality
+      var best = null;
+      for (var i = 0; i < sources.sources.length; i++) {
+        if (sources.sources[i].quality && sources.sources[i].quality.indexOf('HD-2') > -1) {
+          best = sources.sources[i];
+          break;
+        }
+      }
+      if (!best) best = sources.sources[0];
+
+      return json({ encoded: best.url, quality: best.quality }, cors);
+    }
+
+    // Route: /m3u8?encoded=DB5BNE...
+    if (url.pathname === '/m3u8') {
+      const encoded = url.searchParams.get('encoded');
+      if (!encoded) return json({ error: 'missing encoded' }, cors);
+
+      const m3u8Url = 'https://og.bakayaro.live/m3u8/' + encoded;
+      const r = await fetch(m3u8Url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0',
-          'Accept': '*/*',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Origin': 'https://megaplay.buzz',
-          'Referer': 'https://megaplay.buzz/',
-          'Sec-Fetch-Dest': 'empty',
-          'Sec-Fetch-Mode': 'cors',
-          'Sec-Fetch-Site': 'same-origin'
+          'Referer': 'https://anikage.cc/',
+          'Origin': 'https://anikage.cc',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
         }
       });
 
-      const isPlaylist = targetUrl.includes('.m3u8') ||
-                         (proxyRes.headers.get('content-type') || '').includes('mpegurl');
+      if (!r.ok) return json({ error: 'bakayaro returned ' + r.status }, cors);
 
-      if (isPlaylist) {
-        let body = await proxyRes.text();
-        const proxyBase = 'https://' + url.hostname;
+      var text = await r.text();
 
-        const cdnHostMatch = targetUrl.match(/https?:\/\/([a-zA-Z0-9\-\.]+shiora\.site)/);
-        const cdnBase = cdnHostMatch ? 'https://' + cdnHostMatch[1] : '';
+      // Rewrite quality playlist URLs to go through our worker
+      var workerBase = url.origin + '/m3u8?encoded=';
+      text = text.replace(/https:\/\/og\.bakayaro\.live\/m3u8\/([^\s]+)/g, function(match, enc) {
+        return workerBase + enc;
+      });
 
-        // Rewrite absolute shiora URLs
-        body = body.replace(
-          /https?:\/\/[a-zA-Z0-9\-\.]+shiora\.site\/[^\s\n]+/g,
-          function(match) { return proxyBase + '/proxy?url=' + encodeURIComponent(match); }
-        );
-
-        // Rewrite relative URLs (both /absolute and relative.m3u8)
-        body = body.replace(
-          /^([^#\s][^\s\n]+\.m3u8[^\s\n]*)/gm,
-          function(match) {
-            var absolute = match.startsWith('http') ? match : (cdnBase ? cdnBase + '/' + match : match);
-            return proxyBase + '/proxy?url=' + encodeURIComponent(absolute);
-          }
-        );
-
-        // Rewrite /absolute paths
-        if (cdnBase) {
-          body = body.replace(
-            /^(\/[^\s\n]+)/gm,
-            function(match) { return proxyBase + '/proxy?url=' + encodeURIComponent(cdnBase + match); }
-          );
-        }
-
-        return new Response(body, {
-          headers: {
-            'Content-Type': 'application/vnd.apple.mpegurl',
-            'Access-Control-Allow-Origin': '*'
-          }
-        });
-      }
-
-      const buffer = await proxyRes.arrayBuffer();
-      return new Response(buffer, {
-        headers: {
-          'Content-Type': proxyRes.headers.get('content-type') || 'video/mp2t',
-          'Access-Control-Allow-Origin': '*'
-        }
+      return new Response(text, {
+        headers: Object.assign({
+          'Content-Type': 'application/vnd.apple.mpegurl',
+          'Cache-Control': 'no-cache'
+        }, cors)
       });
     }
 
-    return new Response('Not found', { status: 404 });
+    // Route: /segment?url=https://og.bakayaro.live/stream/...
+    if (url.pathname === '/segment') {
+      const segUrl = url.searchParams.get('url');
+      if (!segUrl) return json({ error: 'missing url' }, cors);
+
+      const r = await fetch(segUrl, {
+        headers: {
+          'Referer': 'https://anikage.cc/',
+          'Origin': 'https://anikage.cc',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+
+      return new Response(r.body, {
+        headers: Object.assign({
+          'Content-Type': 'video/MP2T',
+          'Cache-Control': 'max-age=3600'
+        }, cors)
+      });
+    }
+
+    return json({ error: 'unknown route' }, cors);
   }
 };
+
+function json(obj, cors) {
+  return new Response(JSON.stringify(obj), {
+    headers: Object.assign({ 'Content-Type': 'application/json' }, cors)
+  });
+}
