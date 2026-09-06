@@ -11,6 +11,47 @@ export default {
       return new Response(null, { status: 204, headers: cors });
     }
 
+    // ─── /slug?title=xxx&aniId=xxx ────────────────────────────
+    if (url.pathname === '/slug') {
+      const title = url.searchParams.get('title');
+      const aniId = url.searchParams.get('aniId');
+      if (!title && !aniId) return json({ error: 'missing title or aniId' }, cors);
+
+      try {
+        const q = title || '';
+        const r = await fetch('https://anikage.cc/api/media/anime/browse?q=' + encodeURIComponent(q) + '&sort=popularity&page=1&limit=25', {
+          headers: {
+            'Referer': 'https://anikage.cc/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+          }
+        });
+
+        if (!r.ok) return json({ error: 'browse returned ' + r.status }, cors);
+
+        const data = await r.json();
+        const results = data.data || [];
+
+        // If we have an AniList ID, find exact match first
+        if (aniId) {
+          const exact = results.find(function(item) {
+            return String(item.anilistId) === String(aniId);
+          });
+          if (exact) {
+            return json({ slug: exact.slug, title: exact.title, anilistId: exact.anilistId }, cors);
+          }
+        }
+
+        // Fall back to first result
+        if (results.length > 0) {
+          return json({ slug: results[0].slug, title: results[0].title, anilistId: results[0].anilistId, all: results }, cors);
+        }
+
+        return json({ error: 'no results found' }, cors);
+      } catch(e) {
+        return json({ error: 'slug lookup failed: ' + e.message }, cors);
+      }
+    }
+
     // ─── /sources?slug=xxx&ep=1 ───────────────────────────────
     if (url.pathname === '/sources') {
       const slug = url.searchParams.get('slug');
@@ -44,21 +85,10 @@ export default {
 
       if (!sources) return json({ error: 'no dub sources found' }, cors);
 
-      // Pick best quality — prefer hd-1 (megaplay) over hd-2
-      let best = null;
-      for (let i = 0; i < sources.sources.length; i++) {
-        if (sources.sources[i].quality === 'hd-1') {
-          best = sources.sources[i];
-          break;
-        }
-      }
-      if (!best) best = sources.sources[0];
-
       return json({
-        encoded: best.url,
-        quality: best.quality,
-        embedUrl: best.embedUrl,
-        provider: sources.providerId
+        provider: sources.providerId,
+        all: sources.sources,
+        embeds: sources.embeds
       }, cors);
     }
 
@@ -87,22 +117,22 @@ export default {
       let text = await r.text();
       const workerOrigin = url.origin;
 
-      // Rewrite quality playlist URLs (og.bakayaro.live/m3u8/...)
+      // Rewrite quality playlist URLs
       text = text.replace(/https:\/\/og\.bakayaro\.live\/m3u8\/([^\s]+)/g, function(match, enc) {
         return workerOrigin + '/m3u8?encoded=' + enc;
       });
 
-      // Rewrite absolute segment URLs (og.bakayaro.live/stream/...)
+      // Rewrite absolute segment URLs
       text = text.replace(/https:\/\/og\.bakayaro\.live\/stream\/([^\s]+)/g, function(match, seg) {
         return workerOrigin + '/segment?url=' + encodeURIComponent('https://og.bakayaro.live/stream/' + seg);
       });
 
-      // Rewrite relative segment URLs (/stream/...)
+      // Rewrite relative segment URLs starting with /stream/
       text = text.replace(/^\/stream\/([^\s]+)/gm, function(match, seg) {
         return workerOrigin + '/segment?url=' + encodeURIComponent('https://og.bakayaro.live/stream/' + seg);
       });
 
-      // Rewrite any bare relative paths that are just the encoded token
+      // Rewrite bare encoded tokens
       text = text.replace(/^(DB5BNE[^\s]+)/gm, function(match) {
         return workerOrigin + '/m3u8?encoded=' + match;
       });
@@ -115,7 +145,7 @@ export default {
       });
     }
 
-    // ─── /segment?url=https://og.bakayaro.live/stream/... ────
+    // ─── /segment?url=xxx ─────────────────────────────────────
     if (url.pathname === '/segment') {
       const segUrl = url.searchParams.get('url');
       if (!segUrl) return json({ error: 'missing url' }, cors);
@@ -145,45 +175,6 @@ export default {
       });
     }
 
-    // ─── /search?q=naruto ─────────────────────────────────────
-    if (url.pathname === '/search') {
-      const q = url.searchParams.get('q');
-      if (!q) return json({ error: 'missing q' }, cors);
-
-      try {
-        const r = await fetch('https://api.jikan.moe/v4/anime?q=' + encodeURIComponent(q) + '&limit=20&type=tv', {
-          headers: { 'User-Agent': 'LegacyStream/1.0' }
-        });
-        const data = await r.json();
-        return json(data, cors);
-      } catch (e) {
-        return json({ error: 'search failed: ' + e.message }, cors);
-      }
-    }
-
-    // ─── /slug?title=Naruto ───────────────────────────────────
-    if (url.pathname === '/slug') {
-      const title = url.searchParams.get('title');
-      if (!title) return json({ error: 'missing title' }, cors);
-
-      try {
-        const searchUrl = 'https://anikage.cc/api/media/search?q=' + encodeURIComponent(title);
-        const r = await fetch(searchUrl, {
-          headers: {
-            'Referer': 'https://anikage.cc/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
-          }
-        });
-        if (r.ok) {
-          const data = await r.json();
-          return json(data, cors);
-        }
-        return json({ error: 'anikage search returned ' + r.status }, cors);
-      } catch (e) {
-        return json({ error: 'slug lookup failed: ' + e.message }, cors);
-      }
-    }
-
     // ─── /episodes?slug=xxx ───────────────────────────────────
     if (url.pathname === '/episodes') {
       const slug = url.searchParams.get('slug');
@@ -197,11 +188,13 @@ export default {
           }
         });
         if (r.ok) {
-          const data = await r.json();
-          return json(data, cors);
+          const text = await r.text();
+          return new Response(text, {
+            headers: Object.assign({ 'Content-Type': 'application/json' }, cors)
+          });
         }
         return json({ error: 'episodes returned ' + r.status }, cors);
-      } catch (e) {
+      } catch(e) {
         return json({ error: 'episodes failed: ' + e.message }, cors);
       }
     }
@@ -209,10 +202,9 @@ export default {
     // ─── root ─────────────────────────────────────────────────
     return json({
       name: 'LegacyStream Worker',
-      version: '1.0',
+      version: '2.0',
       routes: [
-        '/search?q={title}',
-        '/slug?title={title}',
+        '/slug?title={title}&aniId={anilistId}',
         '/episodes?slug={anikage_slug}',
         '/sources?slug={anikage_slug}&ep={number}',
         '/m3u8?encoded={encoded_from_sources}',
