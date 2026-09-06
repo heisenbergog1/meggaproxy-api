@@ -328,13 +328,14 @@ export default {
         return new Response('segment returned ' + r.status, { status: r.status, headers: cors });
       }
 
-      var respHeaders = {
-        'Content-Type': 'video/MP2T',
-        'Cache-Control': 'max-age=3600',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
-      };
+     var respHeaders = {
+  'Content-Type': 'video/MP2T',
+  'Cache-Control': 'max-age=3600',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
+  'X-Content-Type-Options': 'nosniff',
+};
 
       var contentLength = r.headers.get('Content-Length');
       var acceptRanges  = r.headers.get('Accept-Ranges');
