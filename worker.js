@@ -31,19 +31,16 @@ export default {
         const data = await r.json();
         const results = data.data || [];
 
-        // If we have an AniList ID, find exact match first
         if (aniId) {
-          const exact = results.find(function(item) {
-            return String(item.anilistId) === String(aniId);
-          });
-          if (exact) {
-            return json({ slug: exact.slug, title: exact.title, anilistId: exact.anilistId }, cors);
+          for (var i = 0; i < results.length; i++) {
+            if (String(results[i].anilistId) === String(aniId)) {
+              return json({ slug: results[i].slug, title: results[i].title, anilistId: results[i].anilistId }, cors);
+            }
           }
         }
 
-        // Fall back to first result
         if (results.length > 0) {
-          return json({ slug: results[0].slug, title: results[0].title, anilistId: results[0].anilistId, all: results }, cors);
+          return json({ slug: results[0].slug, title: results[0].title, anilistId: results[0].anilistId }, cors);
         }
 
         return json({ error: 'no results found' }, cors);
@@ -105,7 +102,7 @@ export default {
           headers: {
             'Referer': 'https://anikage.cc/',
             'Origin': 'https://anikage.cc',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
           }
         });
       } catch (e) {
@@ -118,30 +115,34 @@ export default {
       const workerOrigin = url.origin;
 
       // Rewrite quality playlist URLs
-      text = text.replace(/https:\/\/og\.bakayaro\.live\/m3u8\/([^\s]+)/g, function(match, enc) {
+      text = text.replace(/https:\/\/og\.bakayaro\.live\/m3u8\/([^\s\r\n]+)/g, function(match, enc) {
         return workerOrigin + '/m3u8?encoded=' + enc;
       });
 
       // Rewrite absolute segment URLs
-      text = text.replace(/https:\/\/og\.bakayaro\.live\/stream\/([^\s]+)/g, function(match, seg) {
+      text = text.replace(/https:\/\/og\.bakayaro\.live\/stream\/([^\s\r\n]+)/g, function(match, seg) {
         return workerOrigin + '/segment?url=' + encodeURIComponent('https://og.bakayaro.live/stream/' + seg);
       });
 
-      // Rewrite relative segment URLs starting with /stream/
-      text = text.replace(/^\/stream\/([^\s]+)/gm, function(match, seg) {
+      // Rewrite relative /stream/ URLs
+      text = text.replace(/^\/stream\/([^\s\r\n]+)/gm, function(match, seg) {
         return workerOrigin + '/segment?url=' + encodeURIComponent('https://og.bakayaro.live/stream/' + seg);
       });
 
-      // Rewrite bare encoded tokens
-      text = text.replace(/^(DB5BNE[^\s]+)/gm, function(match) {
+      // Rewrite bare encoded tokens on their own line
+      text = text.replace(/^(DB5BNE[^\s\r\n]+)/gm, function(match) {
         return workerOrigin + '/m3u8?encoded=' + match;
       });
 
       return new Response(text, {
-        headers: Object.assign({
+        headers: {
           'Content-Type': 'application/vnd.apple.mpegurl',
-          'Cache-Control': 'no-cache'
-        }, cors)
+          'Cache-Control': 'no-cache, no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+        }
       });
     }
 
@@ -156,7 +157,7 @@ export default {
           headers: {
             'Referer': 'https://anikage.cc/',
             'Origin': 'https://anikage.cc',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
           }
         });
       } catch (e) {
@@ -167,12 +168,23 @@ export default {
         return new Response('segment returned ' + r.status, { status: r.status, headers: cors });
       }
 
-      return new Response(r.body, {
-        headers: Object.assign({
-          'Content-Type': 'video/MP2T',
-          'Cache-Control': 'max-age=3600'
-        }, cors)
-      });
+      // Pass through Content-Length and Accept-Ranges for iOS seeking
+      var respHeaders = {
+        'Content-Type': 'video/MP2T',
+        'Cache-Control': 'max-age=3600',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': '*',
+      };
+
+      var contentLength = r.headers.get('Content-Length');
+      var acceptRanges  = r.headers.get('Accept-Ranges');
+      var contentRange  = r.headers.get('Content-Range');
+      if (contentLength) respHeaders['Content-Length'] = contentLength;
+      if (acceptRanges)  respHeaders['Accept-Ranges']  = acceptRanges;
+      if (contentRange)  respHeaders['Content-Range']  = contentRange;
+
+      return new Response(r.body, { status: r.status, headers: respHeaders });
     }
 
     // ─── /episodes?slug=xxx ───────────────────────────────────
@@ -202,7 +214,7 @@ export default {
     // ─── root ─────────────────────────────────────────────────
     return json({
       name: 'LegacyStream Worker',
-      version: '2.0',
+      version: '3.0',
       routes: [
         '/slug?title={title}&aniId={anilistId}',
         '/episodes?slug={anikage_slug}',
