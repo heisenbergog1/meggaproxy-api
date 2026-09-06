@@ -11,6 +11,117 @@ export default {
       return new Response(null, { status: 204, headers: cors });
     }
 
+    // ─── /debug ───────────────────────────────────────────────
+    // Shows all request headers — open this on iPad to see what iOS sends
+    if (url.pathname === '/debug') {
+      var info = {
+        method: request.method,
+        url: request.url,
+        headers: {}
+      };
+      request.headers.forEach(function(val, key) {
+        info.headers[key] = val;
+      });
+      return new Response(JSON.stringify(info, null, 2), {
+        headers: Object.assign({ 'Content-Type': 'application/json' }, cors)
+      });
+    }
+
+    // ─── /debug-segment?url=xxx ───────────────────────────────
+    // Tests fetching a segment and returns full debug info
+    if (url.pathname === '/debug-segment') {
+      const segUrl = url.searchParams.get('url');
+      if (!segUrl) return json({ error: 'missing url' }, cors);
+
+      var debugInfo = {
+        segUrl: segUrl,
+        requestHeaders: {},
+        responseStatus: null,
+        responseHeaders: {},
+        responseSize: null,
+        error: null,
+        incomingHeaders: {}
+      };
+
+      // Log what iOS/Android is sending us
+      request.headers.forEach(function(val, key) {
+        debugInfo.incomingHeaders[key] = val;
+      });
+
+      var fetchHeaders = {
+        'Referer': 'https://anikage.cc/',
+        'Origin': 'https://anikage.cc',
+        'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
+      };
+
+      var range = request.headers.get('Range');
+      if (range) {
+        fetchHeaders['Range'] = range;
+        debugInfo.rangeHeader = range;
+      }
+
+      debugInfo.requestHeaders = fetchHeaders;
+
+      try {
+        var r = await fetch(segUrl, { headers: fetchHeaders });
+        debugInfo.responseStatus = r.status;
+        r.headers.forEach(function(val, key) {
+          debugInfo.responseHeaders[key] = val;
+        });
+        var body = await r.arrayBuffer();
+        debugInfo.responseSize = body.byteLength;
+        debugInfo.success = r.ok;
+      } catch(e) {
+        debugInfo.error = e.message;
+      }
+
+      return new Response(JSON.stringify(debugInfo, null, 2), {
+        headers: Object.assign({ 'Content-Type': 'application/json' }, cors)
+      });
+    }
+
+    // ─── /debug-m3u8?encoded=xxx ──────────────────────────────
+    // Shows raw m3u8 from bakayaro before rewriting
+    if (url.pathname === '/debug-m3u8') {
+      const encoded = url.searchParams.get('encoded');
+      if (!encoded) return json({ error: 'missing encoded' }, cors);
+
+      var debugInfo = {
+        encoded: encoded,
+        m3u8Url: 'https://og.bakayaro.live/m3u8/' + encoded,
+        incomingHeaders: {},
+        responseStatus: null,
+        responseHeaders: {},
+        rawContent: null,
+        error: null
+      };
+
+      request.headers.forEach(function(val, key) {
+        debugInfo.incomingHeaders[key] = val;
+      });
+
+      try {
+        var r = await fetch('https://og.bakayaro.live/m3u8/' + encoded, {
+          headers: {
+            'Referer': 'https://anikage.cc/',
+            'Origin': 'https://anikage.cc',
+            'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
+          }
+        });
+        debugInfo.responseStatus = r.status;
+        r.headers.forEach(function(val, key) {
+          debugInfo.responseHeaders[key] = val;
+        });
+        debugInfo.rawContent = await r.text();
+      } catch(e) {
+        debugInfo.error = e.message;
+      }
+
+      return new Response(JSON.stringify(debugInfo, null, 2), {
+        headers: Object.assign({ 'Content-Type': 'application/json' }, cors)
+      });
+    }
+
     // ─── /slug?title=xxx&aniId=xxx ────────────────────────────
     if (url.pathname === '/slug') {
       const title = url.searchParams.get('title');
@@ -119,17 +230,17 @@ export default {
         return workerOrigin + '/m3u8?encoded=' + enc;
       });
 
-      // Rewrite absolute segment URLs
+      // Rewrite absolute segment URLs — use /seg/ path to keep URLs short for iOS
       text = text.replace(/https:\/\/og\.bakayaro\.live\/stream\/([^\s\r\n]+)/g, function(match, seg) {
-        return workerOrigin + '/segment?url=' + encodeURIComponent('https://og.bakayaro.live/stream/' + seg);
+        return workerOrigin + '/seg/' + seg;
       });
 
       // Rewrite relative /stream/ URLs
       text = text.replace(/^\/stream\/([^\s\r\n]+)/gm, function(match, seg) {
-        return workerOrigin + '/segment?url=' + encodeURIComponent('https://og.bakayaro.live/stream/' + seg);
+        return workerOrigin + '/seg/' + seg;
       });
 
-      // Rewrite bare encoded tokens on their own line
+      // Rewrite bare encoded tokens
       text = text.replace(/^(DB5BNE[^\s\r\n]+)/gm, function(match) {
         return workerOrigin + '/m3u8?encoded=' + match;
       });
@@ -146,29 +257,77 @@ export default {
       });
     }
 
+    // ─── /seg/{token} ─────────────────────────────────────────
+    // Short URL for segments — avoids iOS URL length limits
+    if (url.pathname.startsWith('/seg/')) {
+      var seg = url.pathname.slice(5);
+      var segUrl = 'https://og.bakayaro.live/stream/' + seg;
+
+      var fetchHeaders = {
+        'Referer': 'https://anikage.cc/',
+        'Origin': 'https://anikage.cc',
+        'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
+      };
+
+      // Forward Range header — iOS AVFoundation sends range requests for seeking
+      var range = request.headers.get('Range');
+      if (range) fetchHeaders['Range'] = range;
+
+      let r;
+      try {
+        r = await fetch(segUrl, { headers: fetchHeaders });
+      } catch(e) {
+        return new Response('seg fetch failed: ' + e.message, { status: 500, headers: cors });
+      }
+
+      if (!r.ok && r.status !== 206) {
+        return new Response('seg returned ' + r.status, { status: r.status, headers: cors });
+      }
+
+      var respHeaders = {
+        'Content-Type': 'video/MP2T',
+        'Cache-Control': 'max-age=3600',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': '*',
+      };
+
+      var contentLength = r.headers.get('Content-Length');
+      var acceptRanges  = r.headers.get('Accept-Ranges');
+      var contentRange  = r.headers.get('Content-Range');
+      if (contentLength) respHeaders['Content-Length'] = contentLength;
+      if (acceptRanges)  respHeaders['Accept-Ranges']  = acceptRanges;
+      if (contentRange)  respHeaders['Content-Range']  = contentRange;
+
+      return new Response(r.body, { status: r.status, headers: respHeaders });
+    }
+
     // ─── /segment?url=xxx ─────────────────────────────────────
+    // Legacy route — kept for backwards compatibility
     if (url.pathname === '/segment') {
       const segUrl = url.searchParams.get('url');
       if (!segUrl) return json({ error: 'missing url' }, cors);
 
+      var fetchHeaders = {
+        'Referer': 'https://anikage.cc/',
+        'Origin': 'https://anikage.cc',
+        'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
+      };
+
+      var range = request.headers.get('Range');
+      if (range) fetchHeaders['Range'] = range;
+
       let r;
       try {
-        r = await fetch(segUrl, {
-          headers: {
-            'Referer': 'https://anikage.cc/',
-            'Origin': 'https://anikage.cc',
-            'User-Agent': 'Mozilla/5.0 (AppleWebKit/605.1.15) Mobile/15E148 Safari/604.1'
-          }
-        });
-      } catch (e) {
+        r = await fetch(segUrl, { headers: fetchHeaders });
+      } catch(e) {
         return new Response('segment fetch failed: ' + e.message, { status: 500, headers: cors });
       }
 
-      if (!r.ok) {
+      if (!r.ok && r.status !== 206) {
         return new Response('segment returned ' + r.status, { status: r.status, headers: cors });
       }
 
-      // Pass through Content-Length and Accept-Ranges for iOS seeking
       var respHeaders = {
         'Content-Type': 'video/MP2T',
         'Cache-Control': 'max-age=3600',
@@ -214,13 +373,17 @@ export default {
     // ─── root ─────────────────────────────────────────────────
     return json({
       name: 'LegacyStream Worker',
-      version: '3.0',
+      version: '4.0',
       routes: [
+        '/debug — shows all request headers',
+        '/debug-segment?url={segment_url} — tests segment fetch',
+        '/debug-m3u8?encoded={encoded} — shows raw m3u8',
         '/slug?title={title}&aniId={anilistId}',
         '/episodes?slug={anikage_slug}',
         '/sources?slug={anikage_slug}&ep={number}',
         '/m3u8?encoded={encoded_from_sources}',
-        '/segment?url={segment_url}'
+        '/seg/{token} — short segment proxy for iOS',
+        '/segment?url={segment_url} — legacy segment proxy'
       ]
     }, cors);
   }
